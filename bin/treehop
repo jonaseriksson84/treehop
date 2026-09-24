@@ -2,7 +2,7 @@
 # treehop: one git worktree per task, warmed up and cleaned up. See `treehop help`.
 set -euo pipefail
 
-VERSION=0.1.1
+VERSION=0.1.2
 
 usage() {
   cat <<'USAGE'

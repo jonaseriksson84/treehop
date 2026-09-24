@@ -7,6 +7,7 @@ tmp=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$tmp"' EXIT
 export HOME=$tmp GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 PATH=$here/bin:$PATH
+md5_of() { if command -v md5sum >/dev/null; then printf '%s' "$1" | md5sum | cut -c1-32; else md5 -q -s "$1"; fi; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass=0; ok() { pass=$((pass+1)); echo "ok  $*"; }
 
@@ -99,23 +100,29 @@ export FAKE_OB_FILE=$tmp/fake-ob
 (cd "$tmp/origin" && touch MODULE.bazel && git add MODULE.bazel && git commit -qm bazel); git pull -q
 rm -f .treehop
 treehop new bz >/dev/null 2>&1; wt=$tmp/repo.worktrees/me-bz
-owned=$tmp/outbase-owned; mkdir -p "$owned/execroot"; printf '%s' "$wt" > "$owned/DO_NOT_BUILD_HERE"; chmod a-w "$owned/execroot"
+owned=$tmp/obroot/$(md5_of "$wt"); mkdir -p "$owned/execroot"; printf '%s' "$wt" > "$owned/DO_NOT_BUILD_HERE"; chmod a-w "$owned/execroot"
 echo "$owned" > "$FAKE_OB_FILE"
 git config treehop.before-remove 'git -C "$TREEHOP_REPO" worktree remove --force "$TREEHOP_PATH"'
 treehop rm bz >/dev/null 2>&1
 git config --unset treehop.before-remove
 [[ ! -e $owned ]] || fail "owned output base not deleted"; ok "owned bazel output base deleted (read-only dirs too)"
 treehop new bz2 >/dev/null 2>&1; wt=$tmp/repo.worktrees/me-bz2
-shared=$tmp/outbase-shared; mkdir -p "$shared"; printf '%s' "$repo" > "$shared/DO_NOT_BUILD_HERE"
+shared=$tmp/obroot/$(md5_of "$wt"); mkdir -p "$shared"; printf '%s' "$repo" > "$shared/DO_NOT_BUILD_HERE"
 echo "$shared" > "$FAKE_OB_FILE"
 treehop rm bz2 2>"$tmp/err" >/dev/null
 [[ -d $shared ]] || fail "shared output base was deleted"
 grep -q "not owned" "$tmp/err" || fail "no warning for shared output base"; ok "unowned bazel output base left alone, with a warning"
 # marker scan finds it without asking bazel
 treehop new bz3 >/dev/null 2>&1; wt=$tmp/repo.worktrees/me-bz3
-scan=$HOME/.cache/bazel/_bazel_$USER/abc123; mkdir -p "$scan"; printf '%s' "$wt" > "$scan/DO_NOT_BUILD_HERE"
+scan=$HOME/.cache/bazel/_bazel_$USER/$(md5_of "$wt"); mkdir -p "$scan"; printf '%s' "$wt" > "$scan/DO_NOT_BUILD_HERE"
 echo /nonexistent > "$FAKE_OB_FILE"
 treehop rm bz3 >/dev/null 2>&1
 [[ ! -e $scan ]] || fail "scanned output base not deleted"; ok "marker-file scan finds the output base"
+# startup --output_base shared by every checkout: the marker names this worktree only because it ran last
+treehop new bz4 >/dev/null 2>&1; wt=$tmp/repo.worktrees/me-bz4
+common=$tmp/common-output-base; mkdir -p "$common"; printf '%s' "$wt" > "$common/DO_NOT_BUILD_HERE"
+echo "$common" > "$FAKE_OB_FILE"
+treehop rm bz4 >/dev/null 2>&1
+[[ -d $common ]] || fail "shared --output_base was deleted"; ok "shared --output_base survives even when its marker names the worktree"
 
 echo "all $pass passed"

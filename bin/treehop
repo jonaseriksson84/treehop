@@ -162,6 +162,12 @@ resolve_path() {  # existing dir > <dir>/<arg> > <dir>/<prefix-><arg>
   die "no worktree for '$arg' (looked in $WT_DIR)"
 }
 
+md5_of() {  # prints the MD5 hex of $1, or nothing if no tool is available
+  if command -v md5sum >/dev/null; then printf '%s' "$1" | md5sum | cut -c1-32
+  elif command -v md5 >/dev/null; then md5 -q -s "$1"
+  fi
+}
+
 bazel_output_base() {  # prints the output base owned by $WT_PATH, or nothing
   [[ -e $WT_PATH/MODULE.bazel || -e $WT_PATH/WORKSPACE || -e $WT_PATH/WORKSPACE.bazel ]] || return 0
   command -v bazel >/dev/null || return 0
@@ -177,7 +183,10 @@ bazel_output_base() {  # prints the output base owned by $WT_PATH, or nothing
   fi
   [[ -n $ob && -d $ob ]] || return 0
   # Never delete an output base shared with other checkouts (startup --output_base, global .bazelrc).
-  if [[ $(cat "$ob/DO_NOT_BUILD_HERE" 2>/dev/null) != "$WT_PATH" ]]; then
+  # Bazel names a default output base after the MD5 of the workspace path; a shared one is named
+  # otherwise, and its marker only names whichever checkout used it last.
+  local want; want=$(md5_of "$WT_PATH")
+  if [[ -z $want || $(basename "$ob") != "$want" || $(cat "$ob/DO_NOT_BUILD_HERE" 2>/dev/null) != "$WT_PATH" ]]; then
     echo "treehop: output base $ob is not owned by this worktree, leaving it" >&2
     return 0
   fi

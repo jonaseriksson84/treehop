@@ -168,7 +168,8 @@ bazel_output_base() {  # prints the output base owned by $WT_PATH, or nothing
   local ob=""
   # Marker-file scan first (no server start); `bazel info` only if that finds nothing,
   # since it honors --output_user_root but spins up a server to answer.
-  for d in "$HOME"/.cache/bazel/_bazel_"$USER"/*/; do
+  # Default output_user_root: ~/.cache/bazel on Linux, /private/var/tmp on macOS.
+  for d in "$HOME"/.cache/bazel/_bazel_"$USER"/*/ /private/var/tmp/_bazel_"$USER"/*/; do
     [[ $(cat "$d/DO_NOT_BUILD_HERE" 2>/dev/null) == "$WT_PATH" ]] && ob=${d%/}
   done
   if [[ -z $ob ]]; then

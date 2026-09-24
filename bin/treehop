@@ -204,7 +204,8 @@ cmd_rm() {
   [[ -n $outbase ]] && (cd "$WT_PATH" && bazel shutdown >/dev/null 2>&1) || true
 
   run_hook "before-remove" "$REPO" "$BEFORE_REMOVE"
-  git -C "$REPO" worktree remove ${force:+--force} "$WT_PATH"
+  # A hook may already have removed the worktree (herdr does).
+  if [[ -d $WT_PATH ]]; then git -C "$REPO" worktree remove ${force:+--force} "$WT_PATH"; fi
   git -C "$REPO" worktree prune
 
   if [[ -n $outbase ]]; then

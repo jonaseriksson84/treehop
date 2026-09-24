@@ -80,6 +80,13 @@ treehop new again >/dev/null 2>&1 || fail "new with stale memory link"
 [[ -d $stale/memory ]] || fail "stale memory link not replaced"; ok "stale Claude memory link replaced"
 treehop rm --force again >/dev/null
 
+# a before-remove hook that removes the worktree itself (as herdr does) doesn't stop cleanup
+treehop new hookrm >/dev/null 2>&1
+git config treehop.before-remove 'git -C "$TREEHOP_REPO" worktree remove --force "$TREEHOP_PATH"'
+treehop rm --force hookrm >/dev/null 2>&1 || fail "rm after hook removed the worktree"
+[[ ! -d $tmp/repo.worktrees/me-hookrm ]] || fail "hookrm still there"; ok "rm survives a hook that removed the worktree"
+git config --unset treehop.before-remove
+
 # bazel output base: deleted when owned by the worktree, left alone otherwise
 mkdir -p "$tmp/fakebin"
 cat > "$tmp/fakebin/bazel" <<'FB'
@@ -93,7 +100,9 @@ rm -f .treehop
 treehop new bz >/dev/null 2>&1; wt=$tmp/repo.worktrees/me-bz
 owned=$tmp/outbase-owned; mkdir -p "$owned/execroot"; printf '%s' "$wt" > "$owned/DO_NOT_BUILD_HERE"; chmod a-w "$owned/execroot"
 echo "$owned" > "$FAKE_OB_FILE"
+git config treehop.before-remove 'git -C "$TREEHOP_REPO" worktree remove --force "$TREEHOP_PATH"'
 treehop rm bz >/dev/null 2>&1
+git config --unset treehop.before-remove
 [[ ! -e $owned ]] || fail "owned output base not deleted"; ok "owned bazel output base deleted (read-only dirs too)"
 treehop new bz2 >/dev/null 2>&1; wt=$tmp/repo.worktrees/me-bz2
 shared=$tmp/outbase-shared; mkdir -p "$shared"; printf '%s' "$repo" > "$shared/DO_NOT_BUILD_HERE"

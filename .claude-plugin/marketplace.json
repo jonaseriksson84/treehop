@@ -1,0 +1,14 @@
+{
+  "name": "treehop",
+  "description": "Marketplace for the treehop plugin. Add with: claude plugin marketplace add jonaseriksson84/treehop",
+  "owner": {
+    "name": "Jonas Eriksson"
+  },
+  "plugins": [
+    {
+      "name": "treehop",
+      "source": "./",
+      "description": "One git worktree per task, warmed up and cleaned up, plus a skill that makes coding agents use it."
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+# Team defaults for a Bazel + pnpm monorepo; personal settings (branch prefix, worktree dir, hooks) go in git config.
+# Fast only with a shared Bazel disk cache in ~/.bazelrc (common --disk_cache=...); see README "Why this is fast".
+# `mise trust` first so pnpm and bazel below resolve through mise without prompting.
+warmup = mise trust -q && pnpm install --frozen-lockfile && bazel run //:gen_all

@@ -1,0 +1,12 @@
+{
+  "name": "treehop",
+  "version": "0.1.0",
+  "description": "One git worktree per task: create it on its own branch, warm it up, remove it with everything it left behind. Ships the CLI and a skill that makes coding agents use it.",
+  "author": {
+    "name": "Jonas Eriksson"
+  },
+  "repository": "https://github.com/jonaseriksson84/treehop",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["git", "worktree", "agents", "bazel", "claude-code"],
+  "skills": ["./skills/worktree"]
+}

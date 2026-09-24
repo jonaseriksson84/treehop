@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Close the herdr workspace that holds the worktree being removed.
+# Wire up: git config treehop.before-remove ~/path/to/herdr-before-remove
+set -euo pipefail
+# Workspace list is keyed by checkout_path and is current; worktree list lags.
+ws=$(herdr workspace list 2>/dev/null | python3 -c '
+import json, sys
+p = sys.argv[1]
+for w in json.load(sys.stdin)["result"]["workspaces"]:
+    if (w.get("worktree") or {}).get("checkout_path") == p:
+        print(w["workspace_id"])
+' "$TREEHOP_PATH" || true)
+[[ -n $ws ]] && herdr worktree remove --workspace "$ws" --force

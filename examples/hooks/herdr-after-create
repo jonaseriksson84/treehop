@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Open the new worktree as a herdr workspace named after the task.
+# Wire up: git config treehop.after-create ~/path/to/herdr-after-create
+set -euo pipefail
+# herdr must open from the repo's parent workspace; it otherwise infers it from whatever is
+# focused, which fails whenever another worktree workspace is active.
+src_ws=$(herdr worktree list --cwd "$TREEHOP_REPO" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["source"]["source_workspace_id"])')
+opened=$(herdr worktree open --workspace "$src_ws" --path "$TREEHOP_PATH" --label "$TREEHOP_NAME" --focus)
+# Take the id from the open result; the list API lags right after an open.
+ws=$(printf '%s' "$opened" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["workspace"]["workspace_id"])' 2>/dev/null || true)
+[[ -n $ws ]] && herdr workspace rename "$ws" "$TREEHOP_NAME" >/dev/null
+echo "herdr workspace ${ws:-?} ($TREEHOP_NAME)"

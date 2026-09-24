@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# treehop: one git worktree per task, warmed up and cleaned up. See `treehop help`.
+set -euo pipefail
+
+VERSION=0.1.0
+
+usage() {
+  cat <<'USAGE'
+Usage: treehop new <name> [base-ref]
+       treehop rm  <name|path> [--force]
+       treehop ls
+       treehop help | version
+
+One git worktree per task: create it on its own branch, warm it up, remove it
+together with everything it left behind.
+
+Commands:
+  new   Add a worktree for branch <prefix><name> at <worktree-dir>/<prefix-><name>.
+        Reuses the branch if it exists, otherwise branches from base-ref
+        (default: the remote's default branch, fetched first) with no upstream.
+        Then runs the warmup command, shares Claude Code memory with the main
+        checkout when ~/.claude/projects has one, and runs the after-create hook.
+  rm    Remove a worktree: before-remove hook, git worktree remove, and its
+        Bazel output base if it has one. Refuses uncommitted changes unless
+        --force. Never deletes the branch.
+  ls    List linked worktrees with branch, dirty state, and whether the branch
+        is merged into the base (fetches the base first).
+
+Configuration, first match wins:
+  git config treehop.<key>      personal, local then global
+  <repo>/.treehop               checked in, "key = value" lines, # comments
+  built-in default
+
+  branch-prefix   prepended to <name>; "/" becomes "-" in the directory name  (default: none)
+  worktree-dir    where worktrees live            (default: <repo parent>/<repo name>.worktrees)
+  base            start point for new branches    (default: origin/HEAD, else origin/main)
+  warmup          shell run inside a new worktree (default: none)
+  after-create    shell hook, run in the new worktree
+  before-remove   shell hook, run in the main checkout before removal
+
+Hooks and warmup run with TREEHOP_REPO, TREEHOP_PATH, TREEHOP_BRANCH and
+TREEHOP_NAME set. They execute shell from the repo's .treehop: trust it as you
+would its build scripts.
+USAGE
+}
+
+die() { echo "treehop: $*" >&2; exit 1; }
+log() { echo ">> $*"; }
+
+# --- repo and config -------------------------------------------------------
+
+find_repo() {
+  git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+  # First entry is always the main worktree, even when run from a linked one.
+  git worktree list --porcelain | sed -n '1s/^worktree //p'
+}
+
+# cfg <key> [default]: git config > .treehop file > default
+cfg() {
+  local key=$1 default=${2:-} v
+  if v=$(git -C "$REPO" config --get "treehop.$key" 2>/dev/null); then
+    printf '%s\n' "$v"; return
+  fi
+  if [[ -f $REPO/.treehop ]]; then
+    v=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$REPO/.treehop" | head -1 | sed 's/[[:space:]]*$//')
+    if [[ -n $v ]]; then printf '%s\n' "$v"; return; fi
+  fi
+  printf '%s\n' "$default"
+}
+
+expand_home() { printf '%s\n' "${1/#\~/$HOME}"; }
+
+default_base() {
+  local ref
+  if ref=$(git -C "$REPO" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null); then
+    printf '%s\n' "${ref#refs/remotes/}"
+  else
+    echo origin/main
+  fi
+}
+
+load_config() {
+  REPO=$(find_repo)
+  PREFIX=$(cfg branch-prefix)
+  WT_DIR=$(expand_home "$(cfg worktree-dir "$(dirname "$REPO")/$(basename "$REPO").worktrees")")
+  [[ $WT_DIR == /* ]] || WT_DIR=$REPO/$WT_DIR   # relative dirs are relative to the main checkout
+  BASE=$(cfg base "$(default_base)")
+  WARMUP=$(cfg warmup)
+  AFTER_CREATE=$(cfg after-create)
+  BEFORE_REMOVE=$(cfg before-remove)
+}
+
+run_hook() {  # run_hook <label> <cwd> <command>
+  local label=$1 dir=$2 cmd=$3
+  [[ -n $cmd ]] || return 0
+  log "$label"
+  (cd "$dir" && TREEHOP_REPO=$REPO TREEHOP_PATH=$WT_PATH TREEHOP_BRANCH=$BRANCH TREEHOP_NAME=$NAME bash -c "$cmd") \
+    || echo "treehop: $label failed (continuing)" >&2
+}
+
+# --- new -------------------------------------------------------------------
+
+cmd_new() {
+  NAME=${1:-}; [[ -n $NAME ]] || { usage >&2; exit 1; }
+  local base=${2:-$BASE}
+  BRANCH=$PREFIX$NAME
+  WT_PATH=$WT_DIR/${BRANCH//\//-}
+  [[ -e $WT_PATH ]] && die "$WT_PATH already exists"
+
+  local t0; t0=$(date +%s)
+  mkdir -p "$WT_DIR"
+  if git -C "$REPO" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    log "reusing existing branch $BRANCH"
+    git -C "$REPO" worktree add "$WT_PATH" "$BRANCH"
+  else
+    # Only a remote-tracking base needs a fetch; a SHA or local branch is already here.
+    if [[ $base == */* ]] && git -C "$REPO" remote | grep -qx "${base%%/*}"; then
+      git -C "$REPO" fetch -q "${base%%/*}" "${base#*/}"
+    fi
+    # --no-track: the upstream is set by the first `git push -u`, never the base branch.
+    git -C "$REPO" worktree add --no-track -b "$BRANCH" "$WT_PATH" "$base"
+  fi
+  # Physical path from here on: git records it, and the memory dir and Bazel marker are keyed by it.
+  WT_PATH=$(cd "$WT_PATH" && pwd -P)
+
+  if [[ -n $WARMUP ]]; then
+    log "warmup"
+    (cd "$WT_PATH" && TREEHOP_REPO=$REPO TREEHOP_PATH=$WT_PATH TREEHOP_BRANCH=$BRANCH TREEHOP_NAME=$NAME bash -c "$WARMUP") \
+      || die "warmup failed; worktree left at $WT_PATH"
+  fi
+
+  share_claude_memory
+  run_hook "after-create" "$WT_PATH" "$AFTER_CREATE"
+  log "ready in $(( $(date +%s) - t0 ))s: $WT_PATH ($BRANCH)"
+}
+
+# Claude Code keys history and memory by cwd. Point the worktree's memory dir
+# at the main checkout's so sessions in both share what they learned.
+claude_project_dir() { printf '%s\n' "$HOME/.claude/projects/$(printf '%s' "$1" | sed 's#[^A-Za-z0-9-]#-#g')"; }
+
+share_claude_memory() {
+  local src; src=$(claude_project_dir "$REPO")/memory
+  [[ -d $src ]] || return 0
+  local proj; proj=$(claude_project_dir "$WT_PATH")
+  mkdir -p "$proj"
+  [[ -L $proj/memory && ! -e $proj/memory ]] && rm "$proj/memory"   # stale link from an earlier worktree
+  if [[ ! -e $proj/memory && ! -L $proj/memory ]]; then
+    ln -s "$src" "$proj/memory"
+    log "sharing Claude Code memory with $REPO"
+  fi
+}
+
+# --- rm --------------------------------------------------------------------
+
+resolve_path() {  # existing dir > <dir>/<arg> > <dir>/<prefix-><arg>
+  local arg=$1 cand
+  if [[ -d $arg ]]; then (cd "$arg" && pwd -P); return; fi
+  for cand in "$WT_DIR/$arg" "$WT_DIR/${PREFIX//\//-}$arg"; do
+    if [[ -d $cand ]]; then (cd "$cand" && pwd -P); return; fi
+  done
+  die "no worktree for '$arg' (looked in $WT_DIR)"
+}
+
+bazel_output_base() {  # prints the output base owned by $WT_PATH, or nothing
+  [[ -e $WT_PATH/MODULE.bazel || -e $WT_PATH/WORKSPACE || -e $WT_PATH/WORKSPACE.bazel ]] || return 0
+  command -v bazel >/dev/null || return 0
+  local ob=""
+  # Marker-file scan first (no server start); `bazel info` only if that finds nothing,
+  # since it honors --output_user_root but spins up a server to answer.
+  for d in "$HOME"/.cache/bazel/_bazel_"$USER"/*/; do
+    [[ $(cat "$d/DO_NOT_BUILD_HERE" 2>/dev/null) == "$WT_PATH" ]] && ob=${d%/}
+  done
+  if [[ -z $ob ]]; then
+    ob=$(cd "$WT_PATH" && bazel info output_base 2>/dev/null) || ob=""
+  fi
+  [[ -n $ob && -d $ob ]] || return 0
+  # Never delete an output base shared with other checkouts (startup --output_base, global .bazelrc).
+  if [[ $(cat "$ob/DO_NOT_BUILD_HERE" 2>/dev/null) != "$WT_PATH" ]]; then
+    echo "treehop: output base $ob is not owned by this worktree, leaving it" >&2
+    return 0
+  fi
+  printf '%s\n' "$ob"
+}
+
+cmd_rm() {
+  local arg="" force=""
+  for a in "$@"; do
+    case $a in --force|-f) force=1;; *) arg=$a;; esac
+  done
+  [[ -n $arg ]] || { usage >&2; exit 1; }
+  WT_PATH=$(resolve_path "$arg")
+  [[ $WT_PATH != "$REPO" ]] || die "refusing to remove the main checkout"
+  git -C "$WT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$WT_PATH is not a git worktree"
+  BRANCH=$(git -C "$WT_PATH" branch --show-current || true)
+  NAME=${BRANCH#"$PREFIX"}
+
+  if [[ -z $force && -n $(git -C "$WT_PATH" status --porcelain) ]]; then
+    die "$WT_PATH has uncommitted changes (use --force to discard)"
+  fi
+
+  # Find the output base before the checkout disappears.
+  local outbase; outbase=$(bazel_output_base)
+  [[ -n $outbase ]] && (cd "$WT_PATH" && bazel shutdown >/dev/null 2>&1) || true
+
+  run_hook "before-remove" "$REPO" "$BEFORE_REMOVE"
+  git -C "$REPO" worktree remove ${force:+--force} "$WT_PATH"
+  git -C "$REPO" worktree prune
+
+  if [[ -n $outbase ]]; then
+    log "deleting bazel output base $outbase"
+    chmod -R u+w "$outbase" 2>/dev/null || true   # bazel leaves outputs read-only
+    rm -rf "$outbase"
+  fi
+  log "removed $WT_PATH${BRANCH:+ (branch $BRANCH kept)}"
+}
+
+# --- ls --------------------------------------------------------------------
+
+cmd_ls() {
+  local path branch dirty merged first=1
+  git -C "$REPO" fetch -q "${BASE%%/*}" "${BASE#*/}" 2>/dev/null || true
+  git -C "$REPO" worktree list --porcelain | while IFS= read -r line; do
+    case $line in
+      "worktree "*) path=${line#worktree }; branch="";;
+      "branch refs/heads/"*) branch=${line#branch refs/heads/};;
+      "") 
+        if [[ $first == 1 ]]; then first=0; continue; fi   # skip the main checkout
+        dirty=""; [[ -n $(git -C "$path" status --porcelain 2>/dev/null) ]] && dirty="dirty"
+        merged=""
+        if [[ -n $branch ]] && git -C "$REPO" merge-base --is-ancestor "$branch" "$BASE" 2>/dev/null; then merged="merged"; fi
+        printf '%-14s %-8s %-8s %s\n' "${branch:-(detached)}" "${dirty:--}" "${merged:--}" "$path"
+        ;;
+    esac
+  done
+}
+
+# --- main ------------------------------------------------------------------
+
+case ${1:-} in
+  "") usage >&2; exit 1;;
+  -h|--help|help) usage; exit 0;;
+  version|--version) echo "treehop $VERSION"; exit 0;;
+esac
+cmd=$1; shift
+load_config
+case $cmd in
+  new) cmd_new "$@";;
+  rm)  cmd_rm "$@";;
+  ls)  cmd_ls;;
+  *) die "unknown command '$cmd' (see treehop help)";;
+esac

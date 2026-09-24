@@ -1,0 +1,17 @@
+name: test
+on: [push, pull_request]
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # treehop's shebang is `env bash`; pin it to /bin/bash so macOS tests Apple's bash 3.2, not Homebrew's.
+      - run: |
+          mkdir -p "$RUNNER_TEMP/shim" && ln -s /bin/bash "$RUNNER_TEMP/shim/bash"
+          echo "$RUNNER_TEMP/shim" >> "$GITHUB_PATH"
+      - run: bash --version | head -1 && git --version
+      - run: bash tests/smoke.sh

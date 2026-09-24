@@ -102,6 +102,7 @@ run_hook() {  # run_hook <label> <cwd> <command>
 
 cmd_new() {
   NAME=${1:-}; [[ -n $NAME ]] || { usage >&2; exit 1; }
+  [[ $NAME != -* ]] || die "unknown option '$NAME' (see treehop help)"
   local base=${2:-$BASE}
   BRANCH=$PREFIX$NAME
   WT_PATH=$WT_DIR/${BRANCH//\//-}
@@ -185,7 +186,7 @@ bazel_output_base() {  # prints the output base owned by $WT_PATH, or nothing
 cmd_rm() {
   local arg="" force=""
   for a in "$@"; do
-    case $a in --force|-f) force=1;; *) arg=$a;; esac
+    case $a in --force|-f) force=1;; -*) die "unknown option '$a' (see treehop help)";; *) arg=$a;; esac
   done
   [[ -n $arg ]] || { usage >&2; exit 1; }
   WT_PATH=$(resolve_path "$arg")
@@ -242,6 +243,7 @@ case ${1:-} in
   version|--version) echo "treehop $VERSION"; exit 0;;
 esac
 cmd=$1; shift
+for a in "$@"; do case $a in -h|--help) usage; exit 0;; esac; done
 load_config
 case $cmd in
   new) cmd_new "$@";;

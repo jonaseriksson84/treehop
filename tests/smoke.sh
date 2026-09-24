@@ -26,6 +26,12 @@ git config treehop.after-create 'echo "$TREEHOP_BRANCH" > "$TREEHOP_REPO/hook-af
 git config treehop.before-remove 'echo "$TREEHOP_PATH" > "$TREEHOP_REPO/hook-before"'
 mkdir -p "$HOME/.claude/projects/$(printf '%s' "$repo" | sed 's#[^A-Za-z0-9-]#-#g')/memory"
 
+# subcommand --help never creates anything; option-looking names are rejected
+treehop new --help >/dev/null || fail "new --help exit"
+treehop rm -h >/dev/null || fail "rm -h exit"
+treehop new -x 2>/dev/null && fail "new -x should fail"
+[[ -z $(git worktree list | sed 1d) ]] && ! git show-ref -q --verify 'refs/heads/me/--help' || fail "--help created a worktree"; ok "subcommand --help is side-effect free"
+
 # new: precedence, path mangling, no upstream, warmup, hook, memory symlink
 treehop new foo >/dev/null
 wt=$tmp/repo.worktrees/me-foo

@@ -1,6 +1,6 @@
 {
   "name": "treehop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One git worktree per task: create it on its own branch, warm it up, remove it with everything it left behind. Ships the CLI and a skill that makes coding agents use it.",
   "author": {
     "name": "Jonas Eriksson"
